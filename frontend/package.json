@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "homepage": "https://hernaldoca.github.io/medidor_pH",
+  "homepage": "https://hernaldoca.github.io/medidorph-web",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

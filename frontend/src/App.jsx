@@ -1,4 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
+import {
+  createExperiment,
+  deleteExperiment as deleteExperimentApi,
+  fetchExperiments,
+  isBackendAvailable,
+} from "./api.js"
 import "./App.css"
 
 const STORAGE_KEY = "medidor-ph-experimentos"
@@ -345,6 +351,7 @@ function App() {
   const [experiments, setExperiments] = useState([])
   const [status, setStatus] = useState("Listo para simular un experimento.")
   const [animationSeed, setAnimationSeed] = useState(0)
+  const [useBackend, setUseBackend] = useState(false)
 
   const selectedIndicator = useMemo(
     () => INDICATORS.find((item) => item.id === form.indicatorId) || INDICATORS[0],
@@ -394,29 +401,44 @@ function App() {
   )
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY)
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed)) {
-          setExperiments(parsed)
+    async function loadExperiments() {
+      try {
+        const backendOk = await isBackendAvailable()
+        setUseBackend(backendOk)
+
+        if (backendOk) {
+          const data = await fetchExperiments()
+          setExperiments(Array.isArray(data) ? data : [])
+          setStatus("Conectado al backend. Los experimentos se guardan en el servidor.")
+          return
         }
+
+        const saved = localStorage.getItem(STORAGE_KEY)
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed)) {
+            setExperiments(parsed)
+          }
+        }
+        setStatus("Backend no disponible. Usando almacenamiento local del navegador.")
+      } catch (_error) {
+        setStatus("No fue posible cargar el historial de experimentos.")
       }
-    } catch (_error) {
-      setStatus("No fue posible leer el historial guardado.")
     }
+
+    loadExperiments()
   }, [])
 
   useEffect(() => {
     setAnimationSeed((value) => value + 1)
   }, [form.substance, form.indicatorId])
 
-  function saveExperiments(nextExperiments) {
+  function saveExperimentsLocal(nextExperiments) {
     setExperiments(nextExperiments)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(nextExperiments))
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
 
     const substance = form.substance.trim()
@@ -425,23 +447,34 @@ function App() {
       return
     }
 
-    const nextExperiments = [
-      {
-        id: `exp-${Date.now()}`,
-        substance,
-        indicatorId: selectedIndicator.id,
-        indicatorName: selectedIndicator.name,
-        phValue: reaction.phValue,
-        colorName: reaction.colorName,
-        classification: reaction.classification,
-        explanation: reaction.explanation,
-        createdAt: new Date().toISOString(),
-      },
-      ...experiments,
-    ]
+    const payload = {
+      substance,
+      indicatorId: selectedIndicator.id,
+      indicatorName: selectedIndicator.name,
+      phValue: reaction.phValue,
+      colorName: reaction.colorName,
+      classification: reaction.classification,
+      explanation: reaction.explanation,
+    }
 
-    saveExperiments(nextExperiments)
-    setStatus("Experimento guardado correctamente.")
+    try {
+      if (useBackend) {
+        const saved = await createExperiment(payload)
+        setExperiments((current) => [saved, ...current])
+      } else {
+        saveExperimentsLocal([
+          {
+            id: `exp-${Date.now()}`,
+            ...payload,
+            createdAt: new Date().toISOString(),
+          },
+          ...experiments,
+        ])
+      }
+      setStatus("Experimento guardado correctamente.")
+    } catch (_error) {
+      setStatus("No se pudo guardar el experimento.")
+    }
   }
 
   function handleReset() {
@@ -450,9 +483,21 @@ function App() {
     setStatus("Formulario listo para un nuevo experimento.")
   }
 
-  function handleDelete(id) {
-    saveExperiments(experiments.filter((item) => item.id !== id))
-    setStatus("Registro eliminado.")
+  async function handleDelete(id) {
+    try {
+      if (useBackend) {
+        await deleteExperimentApi(id)
+      }
+      const next = experiments.filter((item) => item.id !== id)
+      if (!useBackend) {
+        saveExperimentsLocal(next)
+      } else {
+        setExperiments(next)
+      }
+      setStatus("Registro eliminado.")
+    } catch (_error) {
+      setStatus("No se pudo eliminar el registro.")
+    }
   }
 
   function replayAnimation() {
@@ -687,7 +732,11 @@ function App() {
       <section className="history-panel">
         <div className="section-heading">
           <h2>Historial de experimentos</h2>
-          <p>Los registros se guardan en localStorage para que no se pierdan al recargar.</p>
+          <p>
+            {useBackend
+              ? "Los registros se guardan en el backend (archivo JSON en el servidor)."
+              : "Los registros se guardan en localStorage del navegador."}
+          </p>
         </div>
 
         <div className="summary-grid">
